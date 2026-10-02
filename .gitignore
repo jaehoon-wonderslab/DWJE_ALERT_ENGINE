@@ -1,0 +1,14 @@
+# 접속 정보 — 저장소에 올리지 않는다
+config/local.yml
+config/engine.env
+
+# 빌드·실행 산출물
+build/
+.gradle/
+logs/
+run/
+*.log
+
+# Kotlin 캐시와 운영체제 메타데이터입니다.
+.kotlin/
+.DS_Store

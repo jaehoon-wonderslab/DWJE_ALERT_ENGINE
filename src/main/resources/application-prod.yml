@@ -1,0 +1,30 @@
+# =====================================================================================
+#  운영 프로파일
+#
+#  접속 정보는 systemd EnvironmentFile(/etc/default/alert-engine) 로 주입한다.
+#  메일 계정도 환경변수로 준다 — 이 파일에 적지 않는다.
+# =====================================================================================
+spring:
+  mail:
+    host: "${PROD_MAIL_HOST:}"
+    port: "${PROD_MAIL_PORT:587}"
+    username: "${PROD_MAIL_USERNAME:}"
+    password: "${PROD_MAIL_PASSWORD:}"
+    properties:
+      mail.smtp.auth: true
+      mail.smtp.ssl.enable: "${PROD_MAIL_SSL_ENABLE:false}"
+      mail.smtp.ssl.checkserveridentity: true
+      mail.smtp.starttls.enable: "${PROD_MAIL_STARTTLS_ENABLE:true}"
+      mail.smtp.connectiontimeout: 10000
+      mail.smtp.timeout: 10000
+      mail.smtp.writetimeout: 10000
+
+alert:
+  message:
+    from-address: "${PROD_MAIL_FROM:no-reply@dwje.co.kr}"
+    mail-mode: SMTP                 # 운영은 실제 메일을 보낸다
+    web-base-url: "${PROD_WEB_BASE_URL:https://ax.dwje.co.kr}"
+
+logging:
+  level:
+    com.dwje.alert: INFO

@@ -1,0 +1,8 @@
+# 로컬 개발용 접속 설정. 이 파일을 local.yml 로 복사해 값을 채운다.
+#   cp config/local.yml.example config/local.yml
+# local.yml 은 .gitignore 대상이다 — 저장소에 올라가지 않는다.
+alert:
+  db:
+    url: "jdbc:postgresql://localhost:5432/dwjedb"
+    username: "dwje_local"
+    password: "dwje_local"

@@ -1,0 +1,109 @@
+# =====================================================================================
+#  이상 알림 발송 엔진 — 공통 설정
+#
+#  DB 접속 정보는 이 파일에 넣지 않는다. 환경변수 또는 config/local.yml 로 주입한다.
+#    ALERT_DB_URL / ALERT_DB_USERNAME / ALERT_DB_PASSWORD
+#  비어 있으면 기동을 거부하고 설정 방법을 안내한다 (AlertConfigValidator).
+# =====================================================================================
+spring:
+  application:
+    name: alert-engine
+  # 접속 정보를 파일로 두고 싶을 때 쓴다. 없으면 그냥 넘어간다.
+  #   cp config/local.yml.example config/local.yml
+  # 우선순위: 환경변수 > config/local.yml > (없음 → 기동 거부)
+  config:
+    import: "optional:file:./config/local.yml"
+  main:
+    banner-mode: off
+    web-application-type: none      # 배치 전용 — 웹 서버를 띄우지 않는다
+  # 기본 활성 프로파일을 두지 않는다.
+  #   local 을 기본값으로 박아 두면, 운영 서버에서 --spring.profiles.active 를 빼고 띄웠을 때
+  #   조용히 로컬 설정(LOG 메일 모드·DEBUG 로깅)으로 돌아간다. 실행하는 쪽이 매번 밝힌다.
+  #     로컬  --spring.profiles.active=local
+  #     운영  --spring.profiles.active=prod
+
+alert:
+  # ── 스케줄 ───────────────────────────────────────────────────────────────────────
+  schedule:
+    # 기본 — 1분마다, 24시간, 엔진을 내릴 때까지.
+    #   벽시계 경계에 맞춘다. 13:02:30 에 띄우면 13:03:00 → 13:04:00 …
+    #   60을 나누어떨어지는 값만 쓴다 (1 2 3 4 5 6 10 12 15 20 30 60).
+    #   '10분 연속' 같은 지속 조건을 분 단위로 판정하므로 1분보다 성기게 두지 않는 것이 좋다.
+    interval: "1m"
+    # cron: "0 * * * * *"           # 지정하면 interval 보다 우선 (Spring 6필드: 초 분 시 일 월 요일)
+    timezone: Asia/Seoul
+
+  # ── 대상 PostgreSQL (ax 조건·상태·알림 + mes 원천) ───────────────────────────────
+  #    url·username·password 는 여기 두지 않는다. 환경변수 또는 config/local.yml.
+  db:
+    max-pool-size: 4
+
+  # ── 엔진 ─────────────────────────────────────────────────────────────────────────
+  engine:
+    # 다중 인스턴스 동시 실행을 막는 PostgreSQL advisory lock 키.
+    # 이관 엔진(8260829)과 겹치지 않는 값을 쓴다 — 겹치면 서로를 막는다.
+    advisory-lock-key: 480401
+    # 한 틱에서 판정할 (조건 × 대상) 상한. 폭주 방지용이며 남은 것은 다음 틱에서 본다.
+    max-eval-per-tick: 2000
+    # 지표 값이 이 배수만큼 오래되면 그 조건을 판정하지 않는다.
+    #   멈춘 수집의 낡은 값으로 알림을 내면 이미 끝난 이상이 계속 나가거나
+    #   진짜 이상을 정상으로 본다. 판정하지 않고 STALE 로 남긴다.
+    stale-factor: 3
+    # 아무 일도 없던 틱은 실행 이력을 남기지 않는다. 1분 주기면 하루 1,440행이 쌓여
+    # 정작 봐야 할 실행이 묻힌다. 조용한 구간은 이 주기로 요약 1행만 남긴다.
+    heartbeat-min: 60
+    # 종료 신호를 받았을 때 진행 중인 틱이 끝나기를 기다리는 최대 시간(초).
+    # stop.sh 의 STOP_TIMEOUT(기본 180초)은 이 값보다 커야 한다.
+    shutdown-wait-sec: 120
+
+  # ── ① 지표 수집 ──────────────────────────────────────────────────────────────────
+  #    ax.tb_met_metric_collect 에 use_flg='Y' 로 등록된 지표만 수집한다.
+  collect:
+    enabled: true
+    statement-timeout-sec: 30
+    # 한 번의 수집에서 적재할 지표 값 상한. 대상 설비가 갑자기 늘었을 때
+    # tb_met_metric_value 가 폭증하는 것을 막는다.
+    max-points-per-run: 5000
+
+  # ── ④ 발송 ───────────────────────────────────────────────────────────────────────
+  dispatch:
+    enabled: true
+    batch-size: 50
+    max-try: 5
+    # 재시도 간격(초). 시도 횟수에 따라 앞에서부터 고른다. 목록을 넘어가면 마지막 값을 쓴다.
+    backoff-sec: [60, 300, 900, 1800, 3600]
+    # SENDING 으로 굳은 행을 회수하는 기준(초). 엔진이 발송 도중 죽으면 이 시간 뒤에 되돌린다.
+    stuck-after-sec: 300
+    # 발송이 끝난 대기열 행을 며칠 뒤 지울지. 기록은 ax.tb_alm_send_log 에 영구 보존된다.
+    done-retention-days: 7
+
+  # ── ⑤ 에스컬레이션 ───────────────────────────────────────────────────────────────
+  escalation:
+    enabled: true
+
+  # ── 야간 판정 ────────────────────────────────────────────────────────────────────
+  #    수신자·그룹의 night_recv=false 인 사람은 이 구간에 보내지 않는다(send_log SKIPPED).
+  #    유효 시간대(ALM_WINDOW)와는 다른 기준이다 — 그쪽은 조건, 이쪽은 사람이다.
+  night:
+    from: "22:00"
+    to: "06:00"
+
+  # ── 메시지 ───────────────────────────────────────────────────────────────────────
+  message:
+    # 발송 방식 — LOG(발송 내용을 로그로 출력) | SMTP(실제 메일 발송)
+    # SMTP 로 두려면 spring.mail.* 설정이 함께 있어야 한다.
+    mail-mode: LOG
+    from-address: no-reply@dwje.co.kr
+    subject-prefix: "[덕우전자 AX]"
+    # 본문의 {{link}} 를 만들 때 붙이는 웹 주소
+    web-base-url: "http://localhost:8090"
+    # 조건에 blind_field_key 가 걸려 있으면 수신자의 부서 데이터 권한을 확인해 본문 값을 가린다.
+    # 끄면 권한이 없는 사람에게도 실측치가 그대로 나간다 — 데이터 접근 권한이 메일로 샌다.
+    mask-by-recipient: true
+
+logging:
+  level:
+    root: INFO
+    com.dwje.alert: INFO
+    # 판정 과정을 조건 단위로 보려면 DEBUG 로 낮춘다
+    # com.dwje.alert.service: DEBUG

@@ -1,0 +1,15 @@
+# =====================================================================================
+#  로컬 개발 프로파일
+#
+#  접속 정보는 여기 두지 않는다. config/local.yml 또는 환경변수로 준다.
+#    ALERT_DB_URL / ALERT_DB_USERNAME / ALERT_DB_PASSWORD
+#
+#  실행: java -jar alert-engine.jar --spring.profiles.active=local
+# =====================================================================================
+alert:
+  message:
+    mail-mode: LOG                  # 로컬에서 실제 메일이 나가지 않게 한다
+
+logging:
+  level:
+    com.dwje.alert: DEBUG
