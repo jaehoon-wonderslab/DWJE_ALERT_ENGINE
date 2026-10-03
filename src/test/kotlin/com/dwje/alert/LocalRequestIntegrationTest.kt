@@ -44,6 +44,19 @@ class LocalRequestIntegrationTest {
 
 
     @Test
+    fun `메일 발송 주소는 계정 메일을 따르고 비었을 때만 수신자 사본을 씁니다`() = rollback {
+        val repo = RecipientRepository(jdbc)
+        fun mailOf10003() = repo.findTargets(listOf(11), listOf("MAIL")).single { it.userId == "10003" }.destAddr
+        jdbc.update("UPDATE ax.tb_sys_user SET user_state_cd='ACTIVE', email='ae-acct-10003@wonderslab.test' WHERE user_id='10003'", emptyMap<String, Any>())
+        jdbc.update("UPDATE ax.tb_alm_recipient SET email='ae-stale-10003@dwje.test' WHERE user_id='10003'", emptyMap<String, Any>())
+        assertEquals("ae-acct-10003@wonderslab.test", mailOf10003())
+        jdbc.update("UPDATE ax.tb_sys_user SET email=NULL WHERE user_id='10003'", emptyMap<String, Any>())
+        assertEquals("ae-stale-10003@dwje.test", mailOf10003())
+        jdbc.update("UPDATE ax.tb_sys_user SET email='' WHERE user_id='10003'", emptyMap<String, Any>())
+        assertEquals("ae-stale-10003@dwje.test", mailOf10003())
+    }
+
+    @Test
     fun `삭제 예정 컬럼이 없는 조건 표에서도 목록과 단건 조회가 동작합니다`() = rollback {
         jdbc.jdbcTemplate.execute("""
             CREATE TEMP VIEW ae_v73_cond AS
@@ -102,7 +115,7 @@ class LocalRequestIntegrationTest {
         val recipients = RecipientRepository(jdbc)
         val raiser = AlertRaiser(AlertRepository(jdbc), CondStateRepository(jdbc),
             SendQueueRepository(jdbc), SendLogRepository(jdbc), recipients, codes,
-            MessageRenderer(codes, recipients, props), props, GroupReceiveWindow(codes))
+            MessageRenderer(codes, recipients, props), GroupReceiveWindow(codes))
         val cond = ConditionRepository(jdbc).findActive().first().copy(
             groupIds = listOf(11), channels = listOf("MAIL", "POPUP"),
             dedupCd = "AE_TEST_NO_DEDUP", blindFieldKey = null)
@@ -122,15 +135,15 @@ class LocalRequestIntegrationTest {
 
 
     @Test
-    fun `그룹 시간대 밖과 개인 야간 미수신은 항상 SKIPPED입니다`() = rollback {
+    fun `그룹 시간대 밖만 SKIPPED이고 야간에는 건너뛰지 않습니다`() = rollback {
         val props = com.dwje.alert.config.AlertProperties()
         val codes = CodeRepository(jdbc)
         val recipients = org.mockito.Mockito.mock(RecipientRepository::class.java)
-        val target = RecipientTarget(11, "10004", null, null, "POPUP", "10004", false, false, null, "D0820")
+        val target = RecipientTarget(11, "10004", null, null, "POPUP", "10004", false, null, "D0820")
         org.mockito.Mockito.`when`(recipients.findTargets(listOf(11), listOf("POPUP"))).thenReturn(listOf(target))
         val raiser = AlertRaiser(AlertRepository(jdbc), CondStateRepository(jdbc),
             SendQueueRepository(jdbc), SendLogRepository(jdbc), recipients, codes,
-            MessageRenderer(codes, recipients, props), props, GroupReceiveWindow(codes))
+            MessageRenderer(codes, recipients, props), GroupReceiveWindow(codes))
         val base = ConditionRepository(jdbc).findActive().first().copy(
             groupIds = listOf(11), channels = listOf("POPUP"), windowCd = "ALWAYS",
             dedupCd = "AE_TEST_NO_DEDUP", blindFieldKey = null)
@@ -150,11 +163,52 @@ class LocalRequestIntegrationTest {
             "SELECT fail_reason FROM ax.tb_alm_send_log WHERE alert_id=(SELECT max(alert_id) FROM ax.tb_alm_alert)",
             emptyMap<String, Any>(), String::class.java))
         assertEquals(1, raise(12).queuedCnt)
+        // 야간 미수신 기능이 없어졌으므로 23시에도 그대로 보낸다.
         val night = raise(23, "ALWAYS")
-        assertEquals(0, night.queuedCnt)
-        assertEquals(1, night.skipCnt)
+        assertEquals(1, night.queuedCnt)
+        assertEquals(0, night.skipCnt)
         assertEquals(0, raise(21, "ALWAYS", "D0820").queuedCnt)
         assertEquals(0, raise(12, "ALWAYS", "ONCE").queuedCnt)
+    }
+
+    @Test
+    fun `부재이거나 야간 미수신으로 표시된 멤버도 야간에 대기열에 들어갑니다`() = rollback {
+        // V74 적용 전 DB 에만 컬럼이 있다. 있으면 일부러 부재·야간 미수신으로 바꿔 두고 확인한다.
+        val cols = jdbc.queryForList(
+            "SELECT table_name || '.' || column_name FROM information_schema.columns " +
+                "WHERE table_schema='ax' AND column_name IN ('recv_state_cd','night_recv')",
+            emptyMap<String, Any>(), String::class.java).toSet()
+        if ("tb_alm_recipient.recv_state_cd" in cols)
+            jdbc.update("UPDATE ax.tb_alm_recipient SET recv_state_cd='ABSENT' WHERE user_id='10004'", emptyMap<String, Any>())
+        if ("tb_alm_recipient.night_recv" in cols)
+            jdbc.update("UPDATE ax.tb_alm_recipient SET night_recv=false WHERE user_id='10004'", emptyMap<String, Any>())
+        if ("tb_alm_recip_group.night_recv" in cols)
+            jdbc.update("UPDATE ax.tb_alm_recip_group SET night_recv=false WHERE group_id=11", emptyMap<String, Any>())
+        jdbc.update("UPDATE ax.tb_alm_recip_group SET window_cd='ALWAYS' WHERE group_id=11", emptyMap<String, Any>())
+        jdbc.update("UPDATE ax.tb_sys_user SET user_state_cd='ACTIVE' WHERE user_id='10004'", emptyMap<String, Any>())
+
+        val props = com.dwje.alert.config.AlertProperties()
+        val codes = CodeRepository(jdbc)
+        val recipients = RecipientRepository(jdbc)
+        assertTrue(recipients.findTargets(listOf(11), listOf("MAIL", "POPUP")).any { it.userId == "10004" },
+            "부재로 표시된 멤버도 수신 대상입니다")
+        val raiser = AlertRaiser(AlertRepository(jdbc), CondStateRepository(jdbc),
+            SendQueueRepository(jdbc), SendLogRepository(jdbc), recipients, codes,
+            MessageRenderer(codes, recipients, props), GroupReceiveWindow(codes))
+        val cond = ConditionRepository(jdbc).findActive().first().copy(
+            groupIds = listOf(11), channels = listOf("MAIL", "POPUP"), windowCd = "ALWAYS",
+            dedupCd = "AE_TEST_NO_DEDUP", blindFieldKey = null)
+        val now = OffsetDateTime.parse("2026-10-01T23:30:00+09:00")
+        val result = TickResult()
+        raiser.raise(ConditionEvaluator.Breach(cond, "AE_NIGHT_TEST", ScopeDim.NONE,
+            BigDecimal.TEN, now, "부재·야간 제거 검증입니다", null, null), now, result)
+        assertEquals(1, result.raiseCnt)
+        val alertId = "(SELECT max(alert_id) FROM ax.tb_alm_alert)"
+        assertTrue(jdbc.queryForObject("SELECT count(*) FROM ax.tb_alm_send_queue WHERE user_id='10004' AND alert_id=$alertId",
+            emptyMap<String, Any>(), Long::class.java)!! > 0, "야간에도 대기열에 들어가야 합니다")
+        assertEquals(0L, jdbc.queryForObject("SELECT count(*) FROM ax.tb_alm_send_log WHERE send_result_cd='SKIPPED' AND alert_id=$alertId",
+            emptyMap<String, Any>(), Long::class.java))
+        println("부재·야간 표시 컬럼(롤백): $cols, 결과 queued=${result.queuedCnt} skip=${result.skipCnt}")
     }
 
     @Test

@@ -1,7 +1,6 @@
 package com.dwje.alert.config
 
 import org.springframework.boot.context.properties.ConfigurationProperties
-import java.time.LocalTime
 
 /**
  * 엔진 동작 설정. application.yml 의 `alert.*` 에 대응한다.
@@ -14,7 +13,6 @@ data class AlertProperties(
     val engine: Engine = Engine(),
     val collect: Collect = Collect(),
     val dispatch: Dispatch = Dispatch(),
-    val night: Night = Night(),
     val message: Message = Message(),
 ) {
     data class Schedule(
@@ -98,24 +96,6 @@ data class AlertProperties(
         /** 다음 시도까지 기다릴 초. 시도 횟수는 1부터 센다 */
         fun backoffFor(tryCnt: Int): Long =
             backoffSec.getOrElse(tryCnt - 1) { backoffSec.lastOrNull() ?: 60L }
-    }
-
-    /**
-     * 야간 구간. 수신자·그룹의 `night_recv=false` 인 사람은 이 구간에 보내지 않는다.
-     *
-     * 조건의 유효 시간대(ALM_WINDOW)와는 다른 기준이다.
-     * 그쪽은 "이 조건을 언제 보낼지", 이쪽은 "이 사람이 언제 받을지" 다.
-     */
-    data class Night(
-        val from: String = "22:00",
-        val to: String = "06:00",
-    ) {
-        /** 자정을 넘는 구간(22:00~06:00)이므로 단순 비교로는 판정할 수 없다 */
-        fun contains(time: LocalTime): Boolean {
-            val f = LocalTime.parse(from)
-            val t = LocalTime.parse(to)
-            return if (f <= t) time >= f && time < t else time >= f || time < t
-        }
     }
 
     data class Message(

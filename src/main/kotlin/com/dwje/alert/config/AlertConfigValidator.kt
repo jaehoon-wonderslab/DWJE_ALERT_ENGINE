@@ -35,7 +35,6 @@ class AlertConfigValidator(
 
         checkActiveProfiles()
         checkMailMode()
-        checkNight()
 
         log.info("접속 설정 확인 — {}", maskUrl(props.db.url))
         log.debug("계정 — {} (비밀번호 {}자)", props.db.username, props.db.password.length)
@@ -98,17 +97,6 @@ class AlertConfigValidator(
         } else {
             log.info("메일 모드 SMTP — 발신 {} / 서버 {}", props.message.fromAddress, host)
         }
-    }
-
-    /** 야간 구간 형식 점검. 잘못 적으면 판정 때마다 예외가 나므로 기동 때 막는다 */
-    private fun checkNight() {
-        runCatching { java.time.LocalTime.parse(props.night.from); java.time.LocalTime.parse(props.night.to) }
-            .onFailure {
-                throw IllegalStateException(
-                    "alert.night.from/to 는 HH:mm 형식이어야 합니다. " +
-                        "받은 값: from=${props.night.from}, to=${props.night.to}",
-                )
-            }
     }
 
     private fun maskUrl(url: String): String = url.replace(Regex("(?i)(password=)[^;&]*"), "$1****")

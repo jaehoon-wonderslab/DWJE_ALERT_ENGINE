@@ -39,7 +39,7 @@ enum class SendResult {
     /** 중복 억제 창에 걸려 보내지 않음 */
     SUPPRESSED,
 
-    /** 유효 시간대 밖이거나 수신자가 야간 미수신 */
+    /** 조건·그룹의 유효 시간대 밖 */
     SKIPPED,
 }
 

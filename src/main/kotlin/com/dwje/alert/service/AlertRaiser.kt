@@ -1,6 +1,5 @@
 package com.dwje.alert.service
 
-import com.dwje.alert.config.AlertProperties
 import com.dwje.alert.model.AlertCondition
 import com.dwje.alert.model.RecipientTarget
 import com.dwje.alert.model.ScopeDim
@@ -20,7 +19,8 @@ import java.time.OffsetDateTime
 /**
  * ③ 발생 — 판정된 위반을 알림으로 만들고 발송 대기열에 넣는다.
  *
- * 판정 순서는 **① 중복 억제 → ② 알림 생성 → ③ 유효 시간대 → ④ 사람별 야간** 이다.
+ * 판정 순서는 **① 중복 억제 → ② 알림 생성 → ③ 유효 시간대** 이다.
+ * 사람별 야간 미수신·부재 제외는 2026-10-03 에 없어졌다 — 시간 제한은 유효 시간대뿐이다.
  *
  * 시간대 밖이라고 알림 자체를 버리지 않는다. 새벽에 난 이상이 아침에 아무 흔적도 없으면
  * 안 되기 때문이다. 보내지 않은 이유는 ax.tb_alm_send_log 에 SKIPPED 로 남긴다 —
@@ -35,7 +35,6 @@ class AlertRaiser(
     private val recipientRepo: RecipientRepository,
     private val codeRepo: CodeRepository,
     private val renderer: MessageRenderer,
-    private val props: AlertProperties,
     private val groupWindow: GroupReceiveWindow,
 ) {
 
@@ -119,14 +118,13 @@ class AlertRaiser(
                 alertId = alertId, groupId = cond.groupIds.firstOrNull(), userId = null,
                 channelCd = cond.channels.firstOrNull() ?: "MAIL", destAddr = null,
                 result = SendResult.FAIL,
-                failReason = "수신 가능한 멤버가 없습니다(부재·계정 정지 포함)",
+                failReason = "수신 가능한 멤버가 없습니다(계정 정지 포함)",
             )
             result.failCnt++
             log.warn("보낼 수신자가 없습니다 — 조건 '{}' (수신 그룹 {})", cond.name, cond.groupIds)
             return
         }
 
-        val isNight = props.night.contains(now.toLocalTime())
         val ctx = MessageRenderer.Context(
             cond = cond, alertId = alertId, scopeKey = breach.scopeKey,
             value = breach.value, occurredAt = now, evidence = breach.evidence,
@@ -140,17 +138,6 @@ class AlertRaiser(
                     alertId = alertId, groupId = t.groupId, userId = t.userId,
                     channelCd = t.channelCd, destAddr = t.destAddr,
                     result = SendResult.SKIPPED, failReason = windowReason,
-                )
-                result.skipCnt++
-                return@forEach
-            }
-            // 사람의 야간 미수신 설정을 항상 적용합니다.
-            if (isNight && !t.nightRecv) {
-                logRepo.insert(
-                    alertId = alertId, groupId = t.groupId, userId = t.userId,
-                    channelCd = t.channelCd, destAddr = t.destAddr,
-                    result = SendResult.SKIPPED, failReason = "야간 미수신 설정",
-                    isProxy = t.isProxy, proxyOfUserId = t.proxyOfUserId,
                 )
                 result.skipCnt++
                 return@forEach

@@ -123,7 +123,7 @@ cp config/engine.env.example config/engine.env    # 환경변수로 두기 — s
 | 지속 | `ALM_DURATION.attr1/attr2` | `CONT` 연속 N초 · `AVG` 구간 이동평균 · `CLOSE` 일 마감 1회 |
 | 중복 억제 | `ALM_DEDUP.attr1` | 분 단위. `-1` 은 달력일 1회. 억제돼도 기존 알림의 `hit_cnt` 는 오른다 |
 | 유효 시간대 | `ALM_WINDOW.attr1/attr2` | 밖이면 알림은 남기고 발송만 건너뛴다(`SKIPPED`) |
-| 야간 | `alert.night.from/to` | 수신자·그룹이 야간 미수신이면 그 사람만 건너뛴다 |
+| 수신 대상 | 수신 그룹 멤버 | 활성 계정이면 전원 받는다. 부재·야간 수신 구분은 없다(2026-10-03 제거) |
 
 상태 전이는 `NORMAL → PENDING → BREACH` 다. `PENDING` 은 「임계는 넘었지만 10분 연속을 아직 못 채웠다」는 뜻이고,
 중간에 한 번이라도 정상이면 연속은 처음부터 다시 센다.
@@ -193,7 +193,6 @@ SMS 를 성공으로 처리하지 않는 이유 — "SMS 로 알렸다"는 기�
 | `alert.engine.heartbeat-min` | `60` | 조용한 구간에 요약 이력을 남기는 주기(분) |
 | `alert.collect.max-points-per-run` | `5000` | 한 번에 적재할 지표 값 상한 |
 | `alert.dispatch.max-try` | `5` | 발송 재시도 횟수 |
-| `alert.night.from/to` | `22:00`/`06:00` | 야간 구간 |
 | `alert.message.mail-mode` | `LOG` | prod 프로파일은 `SMTP` |
 | `alert.message.mask-by-recipient` | `true` | 수신자 권한에 따라 본문 값을 가린다 |
 
@@ -217,7 +216,7 @@ tail -f logs/alert-error.log       # WARN 이상만 (90일 보존)
 
 | 증상 | 볼 곳 |
 |---|---|
-| 알림이 안 온다 | `ax.tb_alm_send_log` — `SUPPRESSED`(중복 억제) · `SKIPPED`(시간대·야간) · `FAIL`(연락처 없음 등) |
+| 알림이 안 온다 | `ax.tb_alm_send_log` — `SUPPRESSED`(중복 억제) · `SKIPPED`(유효 시간대 밖) · `FAIL`(연락처 없음 등) |
 | 판정이 안 된다 | `ax.tb_alm_cond_state` 의 `last_eval_at` · `state_cd`, 그리고 `logs/alert-error.log` |
 | 값이 안 쌓인다 | `ax.tb_met_metric_collect` 의 `use_flg` · `last_run_at` · `last_error` |
 | 엔진이 도는가 | `ax.tb_alm_eval_run` — 1시간 넘게 행이 없으면 죽은 것이다 |
@@ -265,7 +264,7 @@ WantedBy=multi-user.target
 | 일 마감·일 1회 기준 시각 | 08:00 고정 | 별도 지정 시각 없음 |
 | 복구(해제) 알림 | 보내지 않음 (자동 해제 기록 없음) | 정상 복귀도 통보할지 |
 | `tb_met_metric_value` 파티션 | 없음 | 값이 쌓이기 시작하면 월 파티션(V36 예정) |
-| 당직 대리 수신 | 없음 (V36 에서 당번 표 제거) | 부재자 대신 받을 사람을 둘지 |
+| 당직 대리 수신 | 없음 (V36 에서 당번 표 제거, 부재 기능도 2026-10-03 제거) | 대신 받을 사람을 둘지 |
 
 ---
 
@@ -291,4 +290,4 @@ src/main/kotlin/com/dwje/alert/
 
 ### 발송 조건 고정 동작 (2026-10-03)
 
-조건의 평가 단위는 지표 수집 정의를 따릅니다. 평가 간격은 60초이며, 일 마감·일 1회 지속 조건은 08:00 기준으로 하루 한 번 평가합니다. 조건과 그룹의 유효 시간대 및 개인 야간 미수신을 항상 지킵니다. 정상 복귀는 평가 상태만 정상화하며 알림을 자동 해제하지 않습니다. 메시지는 API와 동일한 엔진 기본 틀을 사용합니다. 조건별 승격은 실행하지 않습니다. 지정 시각 시간대인 ONCE 조건은 활성 조회에서 제외하며 발송도 차단합니다.
+조건의 평가 단위는 지표 수집 정의를 따릅니다. 평가 간격은 60초이며, 일 마감·일 1회 지속 조건은 08:00 기준으로 하루 한 번 평가합니다. 조건과 그룹의 유효 시간대를 항상 지킵니다. 개인 부재·야간 미수신 구분은 없으며 수신 그룹의 활성 멤버는 전원 받습니다. 정상 복귀는 평가 상태만 정상화하며 알림을 자동 해제하지 않습니다. 메시지는 API와 동일한 엔진 기본 틀을 사용합니다. 조건별 승격은 실행하지 않습니다. 지정 시각 시간대인 ONCE 조건은 활성 조회에서 제외하며 발송도 차단합니다.
