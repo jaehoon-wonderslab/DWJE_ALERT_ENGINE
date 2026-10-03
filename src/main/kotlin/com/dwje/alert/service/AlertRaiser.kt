@@ -134,7 +134,7 @@ class AlertRaiser(
 
         val rows = mutableListOf<SendQueueRepository.NewSend>()
         targets.forEach { t ->
-            val windowReason = groupWindow.skipReason(t.groupWindowCd, cond.ignoreWindow, now)
+            val windowReason = groupWindow.skipReason(t.groupWindowCd, now)
             if (windowReason != null) {
                 logRepo.insert(
                     alertId = alertId, groupId = t.groupId, userId = t.userId,
@@ -144,8 +144,7 @@ class AlertRaiser(
                 result.skipCnt++
                 return@forEach
             }
-            // 사람 단위 야간 미수신. 조건의 ignore_window_flg 로도 이것은 넘지 않는다 —
-            // 조건이 급하다는 것과 그 사람이 새벽에 받겠다는 것은 별개다.
+            // 사람의 야간 미수신 설정을 항상 적용합니다.
             if (isNight && !t.nightRecv) {
                 logRepo.insert(
                     alertId = alertId, groupId = t.groupId, userId = t.userId,
@@ -202,14 +201,10 @@ class AlertRaiser(
      * 알림을 삼키는 쪽이 더 나쁘기 때문이다.
      */
     private fun isInWindow(cond: AlertCondition, now: OffsetDateTime): Boolean {
-        if (cond.ignoreWindow) return true
         val time = now.toLocalTime()
 
-        if (cond.windowCd == "ONCE") {
-            // 지정 시각 1회 — 그 시각 이후 1시간 안에만 보낸다.
-            val at = cond.windowTime ?: return true
-            return !time.isBefore(at) && time.isBefore(at.plusHours(1))
-        }
+        // 폐지된 시간대가 남은 조건은 발송하지 않습니다. DB에서도 조건을 중지합니다.
+        if (cond.windowCd == "ONCE") return false
         if (cond.windowCd == "WORKDAY") {
             val day = now.dayOfWeek.value
             if (day >= 6) return false                                  // 토·일 제외

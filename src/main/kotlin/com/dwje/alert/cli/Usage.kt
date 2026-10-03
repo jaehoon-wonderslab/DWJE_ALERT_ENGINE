@@ -49,7 +49,6 @@ object Usage {
         |  ② 평가  조건 × 대상 비교 + 지속 조건 → ax.tb_alm_cond_state
         |  ③ 발생  유효 시간대·중복 억제 → ax.tb_alm_alert + ax.tb_alm_send_queue
         |  ④ 발송  대기열 → 메일·팝업 → ax.tb_alm_send_log
-        |  ⑤ 승격  확인되지 않은 알림을 상위 그룹으로
         |
         |접속 설정
         |  환경변수 3개가 필요하다. 없으면 기동을 거부하고 설정 방법을 안내한다.

@@ -85,7 +85,7 @@ class CodeRepository(private val jdbc: NamedParameterJdbcTemplate) {
 
     /**
      * 유효 시간대 (ALM_WINDOW.attr1 ~ attr2).
-     * `ONCE` 는 조건마다 시각이 달라 여기서 주지 않는다 — tb_alm_cond.window_time 을 본다.
+     * 폐지된 지정 시각 시간대는 사용하지 않습니다.
      */
     fun windowRange(windowCd: String): Pair<LocalTime, LocalTime>? {
         val a = attrs("ALM_WINDOW", windowCd) ?: return null

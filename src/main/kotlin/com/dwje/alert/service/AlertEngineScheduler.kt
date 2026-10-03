@@ -44,7 +44,6 @@ class AlertEngineScheduler(
     private val evaluator: ConditionEvaluator,
     private val raiser: AlertRaiser,
     private val dispatcher: SendDispatcher,
-    private val escalationRunner: EscalationRunner,
     private val props: AlertProperties,
 ) {
 
@@ -155,13 +154,8 @@ class AlertEngineScheduler(
             runCatching { condRepo.touchLastEval(conditions.map { it.condId }, startedAt) }
         }
 
-        // ④ 발송 · ⑤ 승격
+        // ④ 발송
         if (!options.dryRun) {
-            runCatching { escalationRunner.run(startedAt, result) }
-                .onFailure {
-                    result.errors += "승격 단계 실패: ${Throwables.describe(it)}"
-                    log.error("승격 단계에서 오류가 발생했습니다.", it)
-                }
             runCatching { dispatcher.dispatch(startedAt, result) }
                 .onFailure {
                     result.errors += "발송 단계 실패: ${Throwables.describe(it)}"

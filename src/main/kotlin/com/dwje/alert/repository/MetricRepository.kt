@@ -36,9 +36,8 @@ class MetricRepository(private val jdbc: NamedParameterJdbcTemplate) {
     /**
      * 이 지표가 쌓이는 단위 (tb_met_metric_collect.dim_cd). 수집 정의가 없으면 null.
      *
-     * 조건의 평가 단위가 비어(NONE) 있을 때 이 값을 따른다. SY-04 화면은 평가 단위를 고르지
-     * 않아 조건이 늘 NONE 으로 들어온다 — 설비별로 쌓인 값을 NONE 으로 묶으면 같은 시각의
-     * 수백 행 중 아무 설비 하나의 값으로 판정하게 된다.
+     * 엔진은 항상 이 수집 단위를 따릅니다. 설비별로 쌓인 값을 NONE으로 묶으면
+     * 같은 시각의 수백 행 중 아무 설비 하나의 값으로 판정하게 됩니다.
      */
     fun collectDimOf(metricId: Int): ScopeDim? = jdbc.query(
         "SELECT dim_cd FROM ax.tb_met_metric_collect WHERE metric_id = :metricId",

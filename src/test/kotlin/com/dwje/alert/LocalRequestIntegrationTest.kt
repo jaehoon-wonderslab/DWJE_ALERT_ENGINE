@@ -28,7 +28,7 @@ class LocalRequestIntegrationTest {
         300, 60, null, BigDecimal.ZERO, BigDecimal.ONE, BigDecimal.TEN, null, null)
 
     @Test
-    fun `정지 승인대기 잠김 계정은 일반 발송과 승격 공통 수신자에서 제외합니다`() = rollback {
+    fun `정지 승인대기 잠김 계정은 발송 수신자에서 제외합니다`() = rollback {
         val repo = RecipientRepository(jdbc)
         val groups = listOf(11)
         val channels = listOf("MAIL", "POPUP", "SMS", "MSG")
@@ -41,6 +41,49 @@ class LocalRequestIntegrationTest {
         assertTrue(repo.findTargets(groups, channels).any { it.userId == "10004" })
     }
 
+
+
+    @Test
+    fun `삭제 예정 컬럼이 없는 조건 표에서도 목록과 단건 조회가 동작합니다`() = rollback {
+        jdbc.jdbcTemplate.execute("""
+            CREATE TEMP VIEW ae_v73_cond AS
+            SELECT cond_id, cond_nm, severity_cd, metric_id, metric_desc, op_cd, threshold_val,
+                   threshold_text, threshold_unit, duration_cd, target_scope_cd, target_desc,
+                   window_cd, dedup_cd, blind_field_key, use_flg, last_eval_at
+              FROM ax.tb_alm_cond
+        """.trimIndent())
+        val withoutAdvanced = object : NamedParameterJdbcTemplate(ds) {
+            override fun <T : Any?> query(sql: String, params: org.springframework.jdbc.core.namedparam.SqlParameterSource,
+                                         mapper: org.springframework.jdbc.core.RowMapper<T>): List<T> =
+                super.query(sql.replace("ax.tb_alm_cond c", "pg_temp.ae_v73_cond c"), params, mapper)
+        }
+        val expected = ConditionRepository(jdbc).findActive()
+        val repo = ConditionRepository(withoutAdvanced)
+        assertEquals(expected, repo.findActive())
+        expected.forEach { assertEquals(it, repo.findOne(it.condId)) }
+        println("삭제 컬럼 없는 조회 검증 조건: ${expected.map { it.condId }}")
+    }
+
+    @Test
+    fun `로컬 두 조건은 수집 단위 EQPT와 설비별 판정 키를 유지합니다`() {
+        val metrics = MetricRepository(jdbc)
+        val codes = CodeRepository(jdbc)
+        val states = org.mockito.Mockito.mock(CondStateRepository::class.java)
+        val conditions = ConditionRepository(jdbc).findActive().filter { it.condId in listOf(5, 6) }
+        assertEquals(2, conditions.size)
+        for (cond in conditions) {
+            assertEquals(ScopeDim.EQPT, metrics.collectDimOf(cond.metricId!!))
+            val at = metrics.lastValueAt(cond.metricId)!!.plusSeconds(1)
+            val readingKeys = metrics.readValues(cond.metricId, ScopeDim.EQPT, at.minusSeconds(900)).keys
+            org.mockito.Mockito.`when`(states.findByCond(cond.condId)).thenReturn(emptyMap())
+            val result = TickResult()
+            val breaches = ConditionEvaluator(metrics, states, codes, com.dwje.alert.config.AlertProperties())
+                .evaluate(cond, at, result, persist = false)
+            assertEquals(readingKeys.size, result.evalCnt)
+            assertTrue(breaches.all { it.dim == ScopeDim.EQPT && it.scopeKey in readingKeys })
+            println("조건 ${cond.condId}: EQPT 판정 ${result.evalCnt}, 키 $readingKeys, 위반 ${breaches.map { it.scopeKey }}")
+        }
+    }
 
     @Test
     fun `현재 로컬 이관 이력에서 두 지표를 직접 계산합니다`() {
@@ -62,7 +105,7 @@ class LocalRequestIntegrationTest {
             MessageRenderer(codes, recipients, props), props, GroupReceiveWindow(codes))
         val cond = ConditionRepository(jdbc).findActive().first().copy(
             groupIds = listOf(11), channels = listOf("MAIL", "POPUP"),
-            ignoreWindow = true, dedupCd = "AE_TEST_NO_DEDUP", blindFieldKey = null)
+            dedupCd = "AE_TEST_NO_DEDUP", blindFieldKey = null)
         val now = OffsetDateTime.parse("2026-10-01T12:00:00+09:00")
         fun raiseAndCount(): Long {
             val result = TickResult()
@@ -79,7 +122,7 @@ class LocalRequestIntegrationTest {
 
 
     @Test
-    fun `그룹 시간대 밖은 SKIPPED이며 무시 플래그도 개인 야간 설정은 지킵니다`() = rollback {
+    fun `그룹 시간대 밖과 개인 야간 미수신은 항상 SKIPPED입니다`() = rollback {
         val props = com.dwje.alert.config.AlertProperties()
         val codes = CodeRepository(jdbc)
         val recipients = org.mockito.Mockito.mock(RecipientRepository::class.java)
@@ -91,35 +134,38 @@ class LocalRequestIntegrationTest {
         val base = ConditionRepository(jdbc).findActive().first().copy(
             groupIds = listOf(11), channels = listOf("POPUP"), windowCd = "ALWAYS",
             dedupCd = "AE_TEST_NO_DEDUP", blindFieldKey = null)
-        fun raise(hour: Int, ignore: Boolean): TickResult {
+        fun raise(hour: Int, groupWindowCd: String = "D0820", conditionWindowCd: String = "ALWAYS"): TickResult {
             val now = OffsetDateTime.parse("2026-10-01T12:00:00+09:00").withHour(hour)
+            org.mockito.Mockito.`when`(recipients.findTargets(listOf(11), listOf("POPUP")))
+                .thenReturn(listOf(target.copy(groupWindowCd = groupWindowCd)))
             val result = TickResult()
-            raiser.raise(ConditionEvaluator.Breach(base.copy(ignoreWindow = ignore), "AE_WINDOW_TEST",
+            raiser.raise(ConditionEvaluator.Breach(base.copy(windowCd = conditionWindowCd), "AE_WINDOW_TEST",
                 ScopeDim.NONE, BigDecimal.TEN, now, "로컬 그룹 시간대 검증입니다", null, null), now, result)
             return result
         }
-        val skipped = raise(21, false)
+        val skipped = raise(21)
         assertEquals(1, skipped.skipCnt)
         assertEquals(0, skipped.queuedCnt)
         assertEquals("그룹 수신 시간대 밖(08:00~20:00)", jdbc.queryForObject(
             "SELECT fail_reason FROM ax.tb_alm_send_log WHERE alert_id=(SELECT max(alert_id) FROM ax.tb_alm_alert)",
             emptyMap<String, Any>(), String::class.java))
-        assertEquals(1, raise(21, true).queuedCnt)
-        val night = raise(23, true)
+        assertEquals(1, raise(12).queuedCnt)
+        val night = raise(23, "ALWAYS")
         assertEquals(0, night.queuedCnt)
         assertEquals(1, night.skipCnt)
+        assertEquals(0, raise(21, "ALWAYS", "D0820").queuedCnt)
+        assertEquals(0, raise(12, "ALWAYS", "ONCE").queuedCnt)
     }
 
     @Test
-    fun `그룹 시간대와 무시 플래그를 공통코드로 판정합니다`() {
+    fun `그룹 시간대를 공통코드로 판정합니다`() {
         val window = GroupReceiveWindow(CodeRepository(jdbc))
         val now = OffsetDateTime.parse("2026-10-01T21:00:00+09:00")
-        assertEquals("그룹 수신 시간대 밖(08:00~20:00)", window.skipReason("D0820", false, now))
-        assertNull(window.skipReason("D0820", true, now))
-        assertNull(window.skipReason("D0820", false, now.withHour(12)))
-        assertNull(window.skipReason("D0820", false, now.withHour(8)))
-        assertNull(window.skipReason("D0820", false, now.withHour(20)))
-        assertNotNull(window.skipReason("WORKDAY", false, now.plusDays(2).withHour(12)))
+        assertEquals("그룹 수신 시간대 밖(08:00~20:00)", window.skipReason("D0820", now))
+        assertNull(window.skipReason("D0820", now.withHour(12)))
+        assertNull(window.skipReason("D0820", now.withHour(8)))
+        assertNull(window.skipReason("D0820", now.withHour(20)))
+        assertNotNull(window.skipReason("WORKDAY", now.plusDays(2).withHour(12)))
     }
 
     @Test

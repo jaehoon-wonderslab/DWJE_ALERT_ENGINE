@@ -13,8 +13,7 @@ import java.time.format.DateTimeFormatter
 /**
  * 알림 문구를 만든다.
  *
- * 틀은 조건이 들고 있다 (ax.tb_alm_cond.msg_template). 엔진은 치환만 한다 —
- * 문구를 바꾸려고 엔진을 다시 배포하는 일이 없도록.
+ * API와 동일한 기본 틀 하나로 메시지를 만듭니다.
  *
  * [마스킹은 사람마다 다르다]
  * 조건에 blind_field_key 가 걸려 있으면 **수신자의 부서 데이터 권한** 을 확인해 값을 가린다.
@@ -38,8 +37,6 @@ class MessageRenderer(
         val value: BigDecimal,
         val occurredAt: OffsetDateTime,
         val evidence: String,
-        val escLevel: Short = 0,
-        val escLabel: String? = null,
     )
 
     fun render(ctx: Context, to: RecipientTarget?): Rendered {
@@ -73,12 +70,11 @@ class MessageRenderer(
         val prefix = buildString {
             append(props.message.subjectPrefix)
             append("[").append(severityNm).append("]")
-            if (ctx.escLevel > 0) append("[${ctx.escLabel ?: "승격 ${ctx.escLevel}단계"}]")
         }
         val subject = "$prefix ${cond.name} — $scopeText"
 
         val body = buildString {
-            appendLine(substitute(cond.msgTemplate, vars))
+            appendLine(substitute(DEFAULT_TEMPLATE, vars))
             appendLine()
             appendLine("─────────────────────────────────")
             appendLine("조건      ${cond.name}")
@@ -118,6 +114,7 @@ class MessageRenderer(
     }
 
     companion object {
+        const val DEFAULT_TEMPLATE = "[{{severity}}] {{condNm}} — {{scope}} {{metricNm}} {{value}}{{unit}} ({{op}} {{threshold}}{{unit}}) {{link}}"
         private const val MASK = "***"
         private val VAR_PATTERN = Regex("""\{\{\s*([A-Za-z0-9_]+)\s*}}""")
         private val TS: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")

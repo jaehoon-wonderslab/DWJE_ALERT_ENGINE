@@ -1,7 +1,6 @@
 package com.dwje.alert.model
 
 import java.math.BigDecimal
-import java.time.LocalTime
 
 /**
  * 판정할 발송 조건 한 건 (ax.tb_alm_cond + 채널·수신그룹·개별대상).
@@ -27,18 +26,9 @@ data class AlertCondition(
     val targetScopeCd: String,
     val targetDesc: String,
     val windowCd: String,
-    /** windowCd='ONCE' 일 때의 지정 시각 */
-    val windowTime: LocalTime?,
     val dedupCd: String,
-    val scopeDim: ScopeDim,
-    val evalIntervalSec: Int,
-    /** 'Y' 면 유효 시간대 밖에도 발송한다 (수신자 개인의 야간 미수신은 그래도 지킨다) */
-    val ignoreWindow: Boolean,
-    /** 'Y' 면 값이 정상으로 돌아올 때 알림에 resolved_at 을 찍는다 */
-    val autoClose: Boolean,
     /** 본문에서 가려야 할 데이터 접근 항목. 없으면 가리지 않는다 */
     val blindFieldKey: String?,
-    val msgTemplate: String,
     val channels: List<String>,
     val groupIds: List<Int>,
     /** targetScopeCd='PICK' 일 때 고른 대상 코드들 */

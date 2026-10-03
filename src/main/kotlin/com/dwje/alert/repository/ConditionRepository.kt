@@ -1,7 +1,6 @@
 package com.dwje.alert.repository
 
 import com.dwje.alert.model.AlertCondition
-import com.dwje.alert.model.ScopeDim
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate
 import org.springframework.stereotype.Repository
@@ -29,9 +28,7 @@ class ConditionRepository(private val jdbc: NamedParameterJdbcTemplate) {
             SELECT c.cond_id, c.cond_nm, c.severity_cd, c.metric_id, c.metric_desc,
                    c.op_cd, c.threshold_val, c.threshold_text, c.threshold_unit,
                    c.duration_cd, c.target_scope_cd, c.target_desc,
-                   c.window_cd, c.window_time, c.dedup_cd,
-                   c.scope_dim_cd, c.eval_interval_sec, c.ignore_window_flg, c.auto_close_flg,
-                   c.blind_field_key, c.msg_template,
+                   c.window_cd, c.dedup_cd, c.blind_field_key,
                    m.metric_cd, m.metric_nm, m.unit_cd,
                    (SELECT coalesce(array_agg(ch.channel_cd ORDER BY ch.channel_cd), '{}')
                       FROM ax.tb_alm_cond_channel ch WHERE ch.cond_id = c.cond_id)      AS channels,
@@ -41,7 +38,7 @@ class ConditionRepository(private val jdbc: NamedParameterJdbcTemplate) {
                       FROM ax.tb_alm_cond_target t WHERE t.cond_id = c.cond_id)         AS pick_targets
               FROM ax.tb_alm_cond c
               LEFT JOIN ax.tb_met_metric_std m ON m.metric_id = c.metric_id
-             WHERE c.use_flg = 'Y'
+             WHERE c.use_flg = 'Y' AND c.window_cd <> 'ONCE'
                AND (:filtered = false OR c.cond_id = ANY (:condIds))
              ORDER BY c.cond_id
         """.trimIndent()
@@ -59,9 +56,7 @@ class ConditionRepository(private val jdbc: NamedParameterJdbcTemplate) {
             SELECT c.cond_id, c.cond_nm, c.severity_cd, c.metric_id, c.metric_desc,
                    c.op_cd, c.threshold_val, c.threshold_text, c.threshold_unit,
                    c.duration_cd, c.target_scope_cd, c.target_desc,
-                   c.window_cd, c.window_time, c.dedup_cd,
-                   c.scope_dim_cd, c.eval_interval_sec, c.ignore_window_flg, c.auto_close_flg,
-                   c.blind_field_key, c.msg_template,
+                   c.window_cd, c.dedup_cd, c.blind_field_key,
                    m.metric_cd, m.metric_nm, m.unit_cd,
                    (SELECT coalesce(array_agg(ch.channel_cd ORDER BY ch.channel_cd), '{}')
                       FROM ax.tb_alm_cond_channel ch WHERE ch.cond_id = c.cond_id)      AS channels,
@@ -102,14 +97,8 @@ class ConditionRepository(private val jdbc: NamedParameterJdbcTemplate) {
         targetScopeCd = rs.getString("target_scope_cd"),
         targetDesc = rs.getString("target_desc"),
         windowCd = rs.getString("window_cd"),
-        windowTime = rs.getObject("window_time", java.time.LocalTime::class.java),
         dedupCd = rs.getString("dedup_cd"),
-        scopeDim = ScopeDim.of(rs.getString("scope_dim_cd")),
-        evalIntervalSec = rs.getInt("eval_interval_sec"),
-        ignoreWindow = rs.getString("ignore_window_flg") == "Y",
-        autoClose = rs.getString("auto_close_flg") == "Y",
         blindFieldKey = rs.getString("blind_field_key"),
-        msgTemplate = rs.getString("msg_template"),
         channels = rs.textArray("channels"),
         groupIds = rs.intArray("group_ids"),
         pickTargets = rs.textArray("pick_targets"),

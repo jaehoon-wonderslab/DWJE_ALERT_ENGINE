@@ -14,7 +14,6 @@ data class AlertProperties(
     val engine: Engine = Engine(),
     val collect: Collect = Collect(),
     val dispatch: Dispatch = Dispatch(),
-    val escalation: Escalation = Escalation(),
     val night: Night = Night(),
     val message: Message = Message(),
 ) {
@@ -100,8 +99,6 @@ data class AlertProperties(
         fun backoffFor(tryCnt: Int): Long =
             backoffSec.getOrElse(tryCnt - 1) { backoffSec.lastOrNull() ?: 60L }
     }
-
-    data class Escalation(val enabled: Boolean = true)
 
     /**
      * 야간 구간. 수신자·그룹의 `night_recv=false` 인 사람은 이 구간에 보내지 않는다.

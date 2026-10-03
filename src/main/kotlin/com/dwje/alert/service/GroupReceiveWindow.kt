@@ -8,8 +8,7 @@ import java.time.format.DateTimeFormatter
 /** 그룹 시간대의 공통코드 속성을 읽어 발송 제외 사유를 돌려줍니다. */
 @Component
 class GroupReceiveWindow(private val codes: CodeRepository) {
-    fun skipReason(windowCd: String, ignoreWindow: Boolean, now: OffsetDateTime): String? {
-        if (ignoreWindow) return null
+    fun skipReason(windowCd: String, now: OffsetDateTime): String? {
         val range = codes.windowRange(windowCd) ?: return null
         val time = now.toLocalTime()
         val inRange = if (range.first <= range.second) {

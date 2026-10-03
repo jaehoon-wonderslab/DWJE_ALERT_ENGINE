@@ -7,7 +7,6 @@ import com.dwje.alert.model.CondStateRow
 import com.dwje.alert.model.DurationKind
 import com.dwje.alert.model.ScopeDim
 import com.dwje.alert.model.TickResult
-import com.dwje.alert.repository.AlertRepository
 import com.dwje.alert.repository.CodeRepository
 import com.dwje.alert.repository.CondStateRepository
 import com.dwje.alert.repository.MetricRepository
@@ -34,7 +33,6 @@ import java.time.OffsetDateTime
 class ConditionEvaluator(
     private val metricRepo: MetricRepository,
     private val stateRepo: CondStateRepository,
-    private val alertRepo: AlertRepository,
     private val codeRepo: CodeRepository,
     private val props: AlertProperties,
 ) {
@@ -45,7 +43,7 @@ class ConditionEvaluator(
     data class Breach(
         val cond: AlertCondition,
         val scopeKey: String,
-        /** 실제로 판정한 단위. 조건이 NONE 이어도 수집 단위를 따랐으면 그 단위다 */
+        /** 실제로 판정한 단위입니다. 수집 정의의 단위를 따릅니다. */
         val dim: ScopeDim,
         val value: BigDecimal,
         val measuredAt: OffsetDateTime,
@@ -85,7 +83,7 @@ class ConditionEvaluator(
             )
             return emptyList()
         }
-        val staleLimitSec = cond.evalIntervalSec.toLong() * props.engine.staleFactor
+        val staleLimitSec = EVAL_INTERVAL_SEC * props.engine.staleFactor
         if (Duration.between(lastValueAt, now).seconds > maxOf(staleLimitSec, 600)) {
             warnOnce(
                 "cond-${cond.condId}-stale",
@@ -99,12 +97,12 @@ class ConditionEvaluator(
         val requiredSec = codeRepo.durationSeconds(cond.durationCd)
 
         // 일 마감 판정은 하루 한 번이다. 지금이 그 시각 전이면 아무것도 하지 않는다.
-        if (kind == DurationKind.CLOSE && !isCloseTime(cond, now)) return emptyList()
+        if (kind == DurationKind.CLOSE && now.toLocalTime().isBefore(CLOSE_TIME)) return emptyList()
 
         // 조회 구간 — 이동평균이면 그 구간, 연속 판정이면 최근 값만 있으면 되지만
         // 변화율(RATE) 비교를 위해 직전 값까지는 봐야 한다.
         val windowSec = maxOf(requiredSec, MIN_WINDOW_SEC)
-        val dim = effectiveDim(cond, metricId)
+        val dim = effectiveDim(metricId)
         val readings = metricRepo.readValues(metricId, dim, now.minusSeconds(windowSec))
         if (readings.isEmpty()) return emptyList()
 
@@ -116,21 +114,23 @@ class ConditionEvaluator(
             val reading = readings[key] ?: return@forEach
             val prev = states[key] ?: CondStateRow.initial(cond.condId, key, now)
 
-            // 조건별 평가 주기. 1분 틱보다 성기게 잡은 조건은 차례가 아닐 때 건너뛴다.
-            if (prev.lastEvalAt != null && now.isBefore(prev.nextEvalAt)) return@forEach
+            // 평가 간격은 60초입니다. 이전 조건의 긴 예약 시각은 더 이상 사용하지 않습니다.
+            val lastEval = prev.lastEvalAt
+            val notDue = lastEval != null && when (kind) {
+                DurationKind.CLOSE -> !lastEval.withOffsetSameInstant(now.offset).toLocalDate().isBefore(now.toLocalDate())
+                else -> now.isBefore(lastEval.plusSeconds(EVAL_INTERVAL_SEC))
+            }
+            if (notDue) return@forEach
 
             val compareValue = if (kind == DurationKind.AVG) reading.avgValue else reading.value
             val violated = compare(cond.opCd, compareValue, threshold, reading.prevValue)
             result.evalCnt++
 
-            val nextEvalAt = nextEvalAt(cond, kind, now)
+            val nextEvalAt = nextEvalAt(kind, now)
 
             if (!violated) {
                 // 값이 돌아왔다 — 연속은 끊긴다. 중간에 한 번이라도 정상이면 처음부터 다시 센다.
                 if (persist) {
-                    if (prev.state == CondStateCd.BREACH && cond.autoClose && prev.lastAlertId != null) {
-                        alertRepo.markResolved(prev.lastAlertId, now)
-                    }
                     stateRepo.upsertEvaluation(
                         cond.condId, key, CondStateCd.NORMAL, compareValue, now, null, 0, nextEvalAt,
                     )
@@ -184,17 +184,9 @@ class ConditionEvaluator(
         else -> available.sorted()
     }
 
-    /**
-     * 실제로 판정할 단위.
-     *
-     * 조건이 단위를 밝혔으면 그것을 쓴다. NONE 이면 지표가 쌓이는 단위(수집 정의 dim_cd)를 따른다 —
-     * SY-04 화면이 평가 단위를 고르지 않아 조건은 늘 NONE 으로 들어오는데, 설비별로 쌓인 값을
-     * 묶어 버리면 같은 시각의 수백 행 중 아무 설비 하나의 값으로 판정하게 된다.
-     */
-    private fun effectiveDim(cond: AlertCondition, metricId: Int): ScopeDim {
-        if (cond.scopeDim != ScopeDim.NONE) return cond.scopeDim
-        return metricRepo.collectDimOf(metricId) ?: ScopeDim.NONE
-    }
+    /** 평가 단위는 항상 지표 수집 정의를 따르며, 정의가 없으면 NONE으로 판정합니다. */
+    private fun effectiveDim(metricId: Int): ScopeDim =
+        metricRepo.collectDimOf(metricId) ?: ScopeDim.NONE
 
     /**
      * 임계 비교. 연산자는 공통코드(ALM_OP.attr1)에서 온다.
@@ -230,25 +222,13 @@ class ConditionEvaluator(
         }
     }
 
-    /** 다음 평가 시각. 일 마감 조건은 내일 같은 시각으로 밀어 하루 한 번만 돌게 한다 */
-    private fun nextEvalAt(cond: AlertCondition, kind: DurationKind, now: OffsetDateTime): OffsetDateTime =
+    /** 일반 조건은 60초 뒤, 일 마감·일 1회 조건은 다음 날 08:00에 평가합니다. */
+    private fun nextEvalAt(kind: DurationKind, now: OffsetDateTime): OffsetDateTime =
         if (kind == DurationKind.CLOSE) {
-            now.toLocalDate().plusDays(1).atTime(closeTime(cond)).atOffset(now.offset)
+            now.toLocalDate().plusDays(1).atTime(CLOSE_TIME).atOffset(now.offset)
         } else {
-            now.plusSeconds(cond.evalIntervalSec.toLong())
+            now.plusSeconds(EVAL_INTERVAL_SEC)
         }
-
-    /**
-     * 일 마감 판정 시각.
-     *
-     * 조건에 지정 시각(window_time)이 있으면 그것을, 없으면 08:00 을 쓴다.
-     * 「마감」의 기준 시각이 아직 업무적으로 정해지지 않아 기본값을 둔 것이다
-     * (설계서 §10-4 — 이관 야간 배치 완료 시점으로 맞출지 결정 대기).
-     */
-    private fun closeTime(cond: AlertCondition) = cond.windowTime ?: java.time.LocalTime.of(8, 0)
-
-    private fun isCloseTime(cond: AlertCondition, now: OffsetDateTime): Boolean =
-        !now.toLocalTime().isBefore(closeTime(cond))
 
     private fun evidenceOf(
         cond: AlertCondition,
@@ -283,6 +263,8 @@ class ConditionEvaluator(
     }
 
     companion object {
+        const val EVAL_INTERVAL_SEC = 60L
+        val CLOSE_TIME: java.time.LocalTime = java.time.LocalTime.of(8, 0)
         /** 변화율 비교를 위해 최소한 이만큼은 거슬러 본다 */
         private const val MIN_WINDOW_SEC = 900L
         private val WARN_TTL: Duration = Duration.ofHours(1)

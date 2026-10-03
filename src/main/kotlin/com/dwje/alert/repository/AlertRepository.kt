@@ -15,17 +15,6 @@ import java.time.OffsetDateTime
 @Repository
 class AlertRepository(private val jdbc: NamedParameterJdbcTemplate) {
 
-    data class EscalationTarget(
-        val alertId: Long,
-        val condId: Int?,
-        val title: String,
-        val severity: String,
-        val escLevel: Short,
-        val toGroupId: Int?,
-        val levelNm: String,
-        val afterMin: Int,
-    )
-
     /**
      * 억제 창 안에 이미 낸 알림이 있는가.
      *
@@ -124,55 +113,4 @@ class AlertRepository(private val jdbc: NamedParameterJdbcTemplate) {
         )
     }
 
-    /**
-     * 값이 정상으로 돌아왔다.
-     *
-     * 확인 상태(ack_state_cd)는 건드리지 않는다. 사람이 안 봐도 상황은 풀릴 수 있고,
-     * 그렇다고 '확인됨' 으로 바꾸면 아무도 보지 않은 알림이 처리된 것처럼 남는다.
-     */
-    fun markResolved(alertId: Long, at: OffsetDateTime): Int = jdbc.update(
-        "UPDATE ax.tb_alm_alert SET resolved_at = :at WHERE alert_id = :alertId AND resolved_at IS NULL AND test_flg = 'N'",
-        MapSqlParameterSource().addValue("alertId", alertId).addValue("at", at),
-    )
-
-    /**
-     * 승격 대상 — 확인되지 않은 채 after_min 이 지났고 아직 그 단계로 안 올라간 알림.
-     *
-     * 규칙은 ax.tb_alm_escalation_rule 이 쥐고 있고 조건별 적용 여부는
-     * ax.tb_alm_cond_escalation.is_on 이 정한다. 엔진은 시간만 본다.
-     */
-    fun findEscalationTargets(limit: Int): List<EscalationTarget> {
-        val sql = """
-            SELECT a.alert_id, a.cond_id, a.title, a.severity_cd, a.esc_level,
-                   r.esc_level AS to_level, r.to_group_id, r.level_nm, r.after_min
-              FROM ax.tb_alm_alert a
-              JOIN ax.tb_alm_cond_escalation ce ON ce.cond_id = a.cond_id AND ce.is_on
-              JOIN ax.tb_alm_escalation_rule r  ON r.esc_rule_id = ce.esc_rule_id AND r.use_flg = 'Y'
-             WHERE a.test_flg = 'N' AND a.ack_state_cd = 'OPEN'
-               AND a.resolved_at IS NULL
-               AND a.esc_level < r.esc_level
-               AND now() >= a.occurred_at + make_interval(mins => r.after_min)
-               AND (r.severity_filter IS NULL OR r.severity_filter = a.severity_cd)
-             ORDER BY r.esc_level, a.occurred_at
-             LIMIT :limit
-        """.trimIndent()
-        return jdbc.query(sql, MapSqlParameterSource("limit", limit)) { rs, _ ->
-            EscalationTarget(
-                alertId = rs.getLong("alert_id"),
-                condId = rs.getObject("cond_id") as? Int,
-                title = rs.getString("title"),
-                severity = rs.getString("severity_cd"),
-                escLevel = rs.getShort("to_level"),
-                toGroupId = rs.getObject("to_group_id") as? Int,
-                levelNm = rs.getString("level_nm"),
-                afterMin = rs.getInt("after_min"),
-            )
-        }
-    }
-
-    /** 승격 단계를 올린다. 이미 그 단계 이상이면 아무것도 바꾸지 않는다 */
-    fun raiseEscLevel(alertId: Long, level: Short): Int = jdbc.update(
-        "UPDATE ax.tb_alm_alert SET esc_level = :level WHERE alert_id = :alertId AND esc_level < :level",
-        MapSqlParameterSource().addValue("alertId", alertId).addValue("level", level.toInt()),
-    )
 }
